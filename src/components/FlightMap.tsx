@@ -187,12 +187,12 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
     // Initial fetch
     fetchFlights(bounds);
 
-    // Update every 15 seconds
+    // Update every 5 seconds (lowest allowed by OpenSky rate limits)
     intervalRef.current = setInterval(() => {
       if (bounds) {
         fetchFlights(bounds);
       }
-    }, 15000);
+    }, 5000);
     
     return () => {
       if (intervalRef.current) {
@@ -298,7 +298,7 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
         </div>
         <div className="text-sm text-slate-500 flex items-center gap-2">
           <Crosshair className="w-4 h-4" />
-          <span>Updates every 15s • Pan/zoom to explore</span>
+          <span>Updates every 5s • Pan/zoom to explore</span>
         </div>
       </div>
     </div>
