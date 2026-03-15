@@ -203,34 +203,32 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
 
   const defaultCenter: [number, number] = [originLat, originLon];
 
-  if (loading && flights.length === 0 && !mapReady) {
-    return (
-      <div className="w-full h-[600px] bg-slate-100 flex flex-col items-center justify-center border-4 border-dashed border-slate-300 rounded-xl">
-        <Plane className="w-16 h-16 text-slate-400 animate-bounce" />
-        <p className="mt-4 text-slate-600 font-medium">Scanning the skies...</p>
-        <p className="text-sm text-slate-400">Talking to OpenSky satellites</p>
-      </div>
-    );
-  }
-
-  if (error && flights.length === 0) {
-    return (
-      <div className="w-full h-[600px] bg-red-50 flex flex-col items-center justify-center border-4 border-dashed border-red-200 rounded-xl">
-        <div className="text-red-500 text-6xl">🛩️</div>
-        <p className="mt-4 text-red-600 font-medium">{error}</p>
-        <button 
-          onClick={() => bounds && fetchFlights(bounds)}
-          className="mt-4 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors"
-        >
-          Try Again
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="w-full">
-      <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-xl border-2 border-slate-200">
+      <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-xl border-2 border-slate-200 relative">
+        {/* Loading overlay */}
+        {loading && flights.length === 0 && (
+          <div className="absolute inset-0 bg-slate-100/90 z-[1000] flex flex-col items-center justify-center">
+            <Plane className="w-16 h-16 text-slate-400 animate-bounce" />
+            <p className="mt-4 text-slate-600 font-medium">Scanning the skies...</p>
+            <p className="text-sm text-slate-400">Talking to OpenSky satellites</p>
+          </div>
+        )}
+
+        {/* Error overlay */}
+        {error && flights.length === 0 && !loading && (
+          <div className="absolute inset-0 bg-red-50/90 z-[1000] flex flex-col items-center justify-center">
+            <div className="text-red-500 text-6xl">🛩️</div>
+            <p className="mt-4 text-red-600 font-medium">{error}</p>
+            <button 
+              onClick={() => bounds && fetchFlights(bounds)}
+              className="mt-4 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+        )}
+
         <MapContainer
           center={defaultCenter}
           zoom={6}
