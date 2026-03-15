@@ -1,16 +1,5 @@
-import dynamic from "next/dynamic";
+import FlightMapWrapper from "@/components/FlightMapWrapper";
 import { Plane, Globe, Zap } from "lucide-react";
-
-// Dynamically import FlightMap with SSR disabled (Leaflet needs window)
-const FlightMap = dynamic(() => import("@/components/FlightMap"), {
-  ssr: false,
-  loading: () => (
-    <div className="w-full h-[600px] bg-slate-100 flex flex-col items-center justify-center border-4 border-dashed border-slate-300 rounded-xl">
-      <Plane className="w-16 h-16 text-slate-400 animate-bounce" />
-      <p className="mt-4 text-slate-600 font-medium">Loading map...</p>
-    </div>
-  ),
-});
 
 // Country to approximate lat/lon mapping (capital cities for positioning)
 const countryCoordinates: Record<string, [number, number]> = {
@@ -93,7 +82,7 @@ export default async function Home() {
 
         {/* Main Content */}
         <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8">
-          <FlightMap originLat={location.lat} originLon={location.lon} />
+          <FlightMapWrapper originLat={location.lat} originLon={location.lon} />
         </div>
 
         {/* Feature Cards */}
