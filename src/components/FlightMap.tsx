@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Plane, Crosshair, MapPin } from "lucide-react";
 import L from "leaflet";
@@ -24,6 +24,13 @@ interface FlightData {
   vertical_rate: number;
 }
 
+interface Bounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
 declare module "leaflet" {
   export const markerIconDefault: any;
 }
@@ -39,18 +46,71 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-// Custom airplane icon
-const airplaneIcon = new L.DivIcon({
-  className: "custom-airplane-marker",
-  html: `<div class="airplane-icon bg-blue-500 rounded-full p-2 shadow-lg"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20"/><path d="M13 2v20"/><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg></div>`,
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-  popupAnchor: [0, -16],
-});
+// Clear airplane SVG icon
+const airplaneSvg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
+  <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
+</svg>
+`;
+
+// Create airplane icon with rotation based on heading
+const createAirplaneIcon = (heading: number = 0) => {
+  return L.divIcon({
+    className: "custom-airplane-marker",
+    html: `
+      <div class="airplane-container" style="transform: rotate(${heading}deg);">
+        <div class="airplane-icon-wrapper">
+          ${airplaneSvg}
+        </div>
+      </div>
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -16],
+  });
+};
 
 interface FlightMapProps {
   originLat: number;
   originLon: number;
+}
+
+// Component to track map bounds and trigger refetches
+function MapBoundsTracker({ 
+  onBoundsChange, 
+  onMapReady 
+}: { 
+  onBoundsChange: (bounds: Bounds) => void;
+  onMapReady: () => void;
+}) {
+  const map = useMap();
+  
+  useEffect(() => {
+    onMapReady();
+  }, [onMapReady]);
+
+  useMapEvents({
+    moveend: () => {
+      const bounds = map.getBounds();
+      onBoundsChange({
+        minLat: bounds.getSouth(),
+        maxLat: bounds.getNorth(),
+        minLon: bounds.getWest(),
+        maxLon: bounds.getEast(),
+      });
+    },
+    zoomend: () => {
+      const bounds = map.getBounds();
+      onBoundsChange({
+        minLat: bounds.getSouth(),
+        maxLat: bounds.getNorth(),
+        minLon: bounds.getWest(),
+        maxLon: bounds.getEast(),
+      });
+    },
+  });
+
+  return null;
 }
 
 export default function FlightMap({ originLat, originLon }: FlightMapProps) {
@@ -58,19 +118,21 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedFlight, setSelectedFlight] = useState<FlightData | null>(null);
+  const [bounds, setBounds] = useState<Bounds | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch flights within a bounding box around origin
-  const fetchFlights = async () => {
+  // Fetch flights within the current bounding box
+  const fetchFlights = useCallback(async (currentBounds: Bounds) => {
     try {
-      // Create a 5-degree bounding box around origin
-      const minLat = originLat - 2.5;
-      const maxLat = originLat + 2.5;
-      const minLon = originLon - 5;
-      const maxLon = originLon + 5;
+      setLoading(true);
+      
+      // Add a small buffer to ensure we get planes just outside view
+      const bufferLat = (currentBounds.maxLat - currentBounds.minLat) * 0.1;
+      const bufferLon = (currentBounds.maxLon - currentBounds.minLon) * 0.1;
 
       const response = await fetch(
-        `https://opensky-network.org/api/states/all?lamin=${minLat}&lamax=${maxLat}&lomin=${minLon}&lomax=${maxLon}`
+        `https://opensky-network.org/api/states/all?lamin=${currentBounds.minLat - bufferLat}&lamax=${currentBounds.maxLat + bufferLat}&lomin=${currentBounds.minLon - bufferLon}&lomax=${currentBounds.maxLon + bufferLon}`
       );
 
       if (!response.ok) {
@@ -81,7 +143,7 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
       
       if (data.states) {
         const parsedFlights: FlightData[] = data.states
-          .filter((state: any) => state[6] !== null && state[7] !== null) // Only flights with position data
+          .filter((state: any) => state[6] !== null && state[5] !== null) // Only flights with position data
           .map((state: any) => ({
             icao24: state[0],
             callsign: state[1]?.trim() || "Unknown",
@@ -90,40 +152,58 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
             latitude: state[6],
             altitude: state[7],
             velocity: state[9],
-            heading: state[10],
+            heading: state[10] || 0,
             vertical_rate: state[11],
           }));
 
         setFlights(parsedFlights);
-        setLoading(false);
         setError(null);
       } else {
         setFlights([]);
-        setLoading(false);
       }
     } catch (err) {
       console.error("Error fetching flights:", err);
       setError("Couldn't reach the sky... probably too cloudy");
+    } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
+  // Handle bounds change from map
+  const handleBoundsChange = useCallback((newBounds: Bounds) => {
+    setBounds(newBounds);
+    fetchFlights(newBounds);
+  }, [fetchFlights]);
+
+  // Initial fetch when map is ready
+  const handleMapReady = useCallback(() => {
+    setMapReady(true);
+  }, []);
+
+  // Set up interval for auto-refresh
   useEffect(() => {
-    fetchFlights();
+    if (!mapReady || !bounds) return;
+
+    // Initial fetch
+    fetchFlights(bounds);
+
     // Update every 15 seconds
-    intervalRef.current = setInterval(fetchFlights, 15000);
+    intervalRef.current = setInterval(() => {
+      if (bounds) {
+        fetchFlights(bounds);
+      }
+    }, 15000);
     
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [originLat, originLon]);
+  }, [mapReady, bounds, fetchFlights]);
 
-  // Center the view on selected country's approximate location
   const defaultCenter: [number, number] = [originLat, originLon];
 
-  if (loading && flights.length === 0) {
+  if (loading && flights.length === 0 && !mapReady) {
     return (
       <div className="w-full h-[600px] bg-slate-100 flex flex-col items-center justify-center border-4 border-dashed border-slate-300 rounded-xl">
         <Plane className="w-16 h-16 text-slate-400 animate-bounce" />
@@ -133,13 +213,13 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
     );
   }
 
-  if (error) {
+  if (error && flights.length === 0) {
     return (
       <div className="w-full h-[600px] bg-red-50 flex flex-col items-center justify-center border-4 border-dashed border-red-200 rounded-xl">
         <div className="text-red-500 text-6xl">🛩️</div>
         <p className="mt-4 text-red-600 font-medium">{error}</p>
         <button 
-          onClick={fetchFlights}
+          onClick={() => bounds && fetchFlights(bounds)}
           className="mt-4 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors"
         >
           Try Again
@@ -166,6 +246,8 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
             url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
           />
           
+          <MapBoundsTracker onBoundsChange={handleBoundsChange} onMapReady={handleMapReady} />
+          
           {/* User location marker */}
           <Marker position={defaultCenter}>
             <Popup>
@@ -182,7 +264,7 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
             <Marker
               key={flight.icao24}
               position={[flight.latitude, flight.longitude]}
-              icon={airplaneIcon}
+              icon={createAirplaneIcon(flight.heading)}
               eventHandlers={{
                 click: () => setSelectedFlight(flight),
               }}
@@ -212,11 +294,11 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
         <div className="flex items-center gap-2">
           <Plane className="w-5 h-5 text-blue-500" />
           <span className="font-semibold">{flights.length}</span>
-          <span className="text-slate-600">planes in the air</span>
+          <span className="text-slate-600">planes in view</span>
         </div>
         <div className="text-sm text-slate-500 flex items-center gap-2">
           <Crosshair className="w-4 h-4" />
-          <span>Centered on your location • Updates every 15s</span>
+          <span>Updates every 15s • Pan/zoom to explore</span>
         </div>
       </div>
     </div>
