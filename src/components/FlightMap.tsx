@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { Plane, Crosshair, MapPin } from "lucide-react";
+import { Plane, Crosshair, MapPin, Loader2 } from "lucide-react";
 import L from "leaflet";
 
 // Fix for default Leaflet markers in Next.js
@@ -120,12 +120,40 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
   const [selectedFlight, setSelectedFlight] = useState<FlightData | null>(null);
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  
+  // Refs for rate limiting
+  const lastFetchTimeRef = useRef<number>(0);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingBoundsRef = useRef<Bounds | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Rate limiting constants
+  const MIN_FETCH_INTERVAL = 5000; // 5 seconds minimum between API calls
+  const DEBOUNCE_DELAY = 750; // Wait 750ms after user stops moving before fetching
 
   // Fetch flights within the current bounding box
-  const fetchFlights = useCallback(async (currentBounds: Bounds) => {
+  const fetchFlights = useCallback(async (currentBounds: Bounds, isBackground: boolean = false) => {
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastFetchTimeRef.current;
+    
+    // Enforce minimum interval between API calls
+    if (timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+      // Schedule the fetch for when the interval expires
+      const delayNeeded = MIN_FETCH_INTERVAL - timeSinceLastFetch;
+      setTimeout(() => {
+        fetchFlights(currentBounds, isBackground);
+      }, delayNeeded);
+      return;
+    }
+
     try {
-      setLoading(true);
+      if (!isBackground) {
+        setLoading(true);
+      }
+      
+      // Update last fetch time before the request to prevent race conditions
+      lastFetchTimeRef.current = Date.now();
       
       // Add a small buffer to ensure we get planes just outside view
       const bufferLat = (currentBounds.maxLat - currentBounds.minLat) * 0.1;
@@ -161,19 +189,40 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
       } else {
         setFlights([]);
       }
+      
+      if (!initialLoadComplete) {
+        setInitialLoadComplete(true);
+      }
     } catch (err) {
       console.error("Error fetching flights:", err);
       setError("Couldn't reach the sky... probably too cloudy");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialLoadComplete]);
 
-  // Handle bounds change from map
+  // Handle bounds change from map with debouncing and rate limiting
   const handleBoundsChange = useCallback((newBounds: Bounds) => {
+    pendingBoundsRef.current = newBounds;
     setBounds(newBounds);
-    fetchFlights(newBounds);
-  }, [fetchFlights]);
+    
+    // Clear any existing debounce timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    // Set a new debounce timer
+    debounceTimerRef.current = setTimeout(() => {
+      const now = Date.now();
+      const timeSinceLastFetch = now - lastFetchTimeRef.current;
+      
+      // Only fetch if minimum interval has passed
+      if (timeSinceLastFetch >= MIN_FETCH_INTERVAL) {
+        fetchFlights(newBounds, initialLoadComplete);
+      }
+      // If not enough time has passed, the fetch will be handled by the interval
+    }, DEBOUNCE_DELAY);
+  }, [fetchFlights, initialLoadComplete]);
 
   // Initial fetch when map is ready
   const handleMapReady = useCallback(() => {
@@ -190,13 +239,20 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
     // Update every 5 seconds (lowest allowed by OpenSky rate limits)
     intervalRef.current = setInterval(() => {
       if (bounds) {
-        fetchFlights(bounds);
+        const now = Date.now();
+        // Only fetch if minimum interval has passed since last manual fetch
+        if (now - lastFetchTimeRef.current >= MIN_FETCH_INTERVAL) {
+          fetchFlights(bounds, true);
+        }
       }
-    }, 5000);
+    }, MIN_FETCH_INTERVAL);
     
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+      }
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
     };
   }, [mapReady, bounds, fetchFlights]);
@@ -206,12 +262,20 @@ export default function FlightMap({ originLat, originLon }: FlightMapProps) {
   return (
     <div className="w-full">
       <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-xl border-2 border-slate-200 relative">
-        {/* Loading overlay */}
-        {loading && flights.length === 0 && (
+        {/* Non-blocking loading indicator - only shown during initial load */}
+        {!initialLoadComplete && loading && (
           <div className="absolute inset-0 bg-slate-100/90 z-[1000] flex flex-col items-center justify-center">
             <Plane className="w-16 h-16 text-slate-400 animate-bounce" />
             <p className="mt-4 text-slate-600 font-medium">Scanning the skies...</p>
             <p className="text-sm text-slate-400">Talking to OpenSky satellites</p>
+          </div>
+        )}
+
+        {/* Corner loading indicator for background updates */}
+        {initialLoadComplete && loading && (
+          <div className="absolute top-4 right-4 z-[1000] bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 shadow-md border border-slate-200 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+            <span className="text-xs text-slate-600">Fetching live data (this might take a few seconds)...</span>
           </div>
         )}
 
